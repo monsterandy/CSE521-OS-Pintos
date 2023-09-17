@@ -1,0 +1,27 @@
+{
+    "configurations": [
+        {
+            "name": "(gdb) Launch",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/threads/build/kernel.o",
+            "miDebuggerPath": "/usr/local/bin/pintos-gdb",
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Run Pintos",
+                    "text": "debugpintos",
+                    "ignoreFailures": true
+                },
+            ],
+        }
+    ]
+}
