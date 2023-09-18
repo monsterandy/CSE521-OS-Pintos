@@ -5,6 +5,8 @@
 #include <list.h>
 #include <stdint.h>
 
+#include "threads/synch.h" /* Added for semaphore */
+
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -90,8 +92,10 @@ struct thread
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
 
-    int64_t sleep_ticks;
-
+    struct semaphore sleep_sema;        /* Semaphore to synchronize sleep and awake. */
+    int64_t sleep_ticks;                /* Ticks to sleep. */
+    
+    struct list_elem elem_sleep;        /* List element for sleep list. */
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 

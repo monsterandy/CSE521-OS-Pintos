@@ -32,9 +32,6 @@ static struct list all_list;
 /* List of sleeping threads. */
 static struct list sleep_list;
 
-/* Semaphore to synchronize sleep and awake. */
-// static struct semaphore sleep_started;
-
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -100,7 +97,6 @@ thread_init (void)
   list_init (&ready_list);
   list_init (&all_list);
   list_init (&sleep_list);
-  // sema_init (&sleep_started, 0);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -154,8 +150,8 @@ thread_tick (void)
 bool
 compare_sleep_ticks (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
 {
-  struct thread *ta = list_entry (a, struct thread, elem);
-  struct thread *tb = list_entry (b, struct thread, elem);
+  struct thread *ta = list_entry (a, struct thread, elem_sleep);
+  struct thread *tb = list_entry (b, struct thread, elem_sleep);
 
   if (ta->sleep_ticks < tb->sleep_ticks)
     return true;
@@ -174,14 +170,12 @@ thread_sleep (int64_t ticks)
   ASSERT (intr_get_level () == INTR_ON);
 
   t->sleep_ticks = ticks + timer_ticks ();
-  old_level = intr_disable ();
 
-  // We need to order the sleep_list by sleep_ticks.
-  list_insert_ordered (&sleep_list, &t->elem, compare_sleep_ticks, NULL);
-  // printf ("blocked!\n");
-  // sema_down (&sleep_started);
-  thread_block ();
-  // printf ("continue\n");
+  old_level = intr_disable ();
+  /* We need to order the sleep_list by sleep_ticks. */
+  list_insert_ordered (&sleep_list, &t->elem_sleep, compare_sleep_ticks, NULL);
+  /* Use the semaphore to block the thread. */
+  sema_down(&t->sleep_sema);
   intr_set_level (old_level);
 }
 
@@ -195,22 +189,14 @@ thread_awake (void)
 
   while (!list_empty (&sleep_list))
   {
-    tsleep = list_entry (list_front (&sleep_list), struct thread, elem);
+    tsleep = list_entry (list_front (&sleep_list), struct thread, elem_sleep);
 
-    int64_t ticks = timer_ticks ();
-    if (tsleep->sleep_ticks > ticks)
-    {
+    if (tsleep->sleep_ticks > timer_ticks ())
       break;
-    }
-    // printf("thread_id: %d\n", tsleep->tid);
-    // printf ("list_pop_front\n");
+
     list_pop_front (&sleep_list);
 
-    // printf ("sema_value: %d\n", sleep_started.value);
-    // printf ("sema_waiters: %d\n", list_size (&sleep_started.waiters));
-    // sema_up (&sleep_started);
-    thread_unblock (tsleep);
-    // printf ("ublocked!\n");
+    sema_up(&tsleep->sleep_sema);
   }
 
   intr_set_level (old_level);
@@ -541,6 +527,9 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
   t->sleep_ticks = 0;
+
+  /* KEY: Initialize the sleep semaphore here to avoid memory issue. */
+  sema_init(&t->sleep_sema, 0);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
