@@ -399,8 +399,25 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  // TODO: Implement priority donation.
-  thread_current ()->priority = new_priority;
+  int old_base_priority = thread_current ()->priority;
+  /* if diff is negative, then the thread is lowering its priority. */
+  /* otherwise, the thread is raising its priority. */
+  int priority_base_diff = new_priority - old_base_priority;
+
+  if (&thread_current ()->locks != NULL)
+  {
+    /* update all the locks that the thread is holding. */
+    struct list_elem *e;
+    struct lock *l;
+    for (e = list_begin (&thread_current ()->locks); e != list_end (&thread_current ()->locks); e = list_next (e))
+    {
+      l = list_entry (e, struct lock, elem);
+      /* if the thread wants to lower its priority, then we need to raise the priority of the lock */
+      l->priority_get -= priority_base_diff;
+    }
+  }
+
+  thread_current ()->priority += priority_base_diff;
   thread_yield ();
 }
 
