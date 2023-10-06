@@ -407,7 +407,10 @@ thread_set_priority (int new_priority)
 int
 thread_get_priority (void) 
 {
-  return thread_current ()->priority;
+  int priority_donate = 0;
+  if (!list_empty (&thread_current ()->locks))
+    priority_donate = list_entry (list_max (&thread_current ()->locks, lock_priority_less, NULL), struct lock, elem)->priority_get;
+  return thread_current ()->priority + priority_donate;
 }
 
 /* Sets the current thread's nice value to NICE. */
@@ -527,6 +530,7 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  list_init (&t->locks);
   t->magic = THREAD_MAGIC;
   t->sleep_ticks = 0;
 
@@ -557,8 +561,16 @@ thread_priority_larger (const struct list_elem *a, const struct list_elem *b, vo
 {
   struct thread *ta = list_entry (a, struct thread, elem);
   struct thread *tb = list_entry (b, struct thread, elem);
+  int ta_donate = 0;
+  int tb_donate = 0;
 
-  if (ta->priority > tb->priority)
+  if (!list_empty (&ta->locks))
+    ta_donate = list_entry (list_max (&ta->locks, lock_priority_less, NULL), struct lock, elem)->priority_get;
+  
+  if (!list_empty (&tb->locks))
+    tb_donate = list_entry (list_max (&tb->locks, lock_priority_less, NULL), struct lock, elem)->priority_get;
+
+  if (ta->priority + ta_donate > tb->priority + tb_donate)
     return true;
   else
     return false;

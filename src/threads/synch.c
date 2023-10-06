@@ -188,7 +188,20 @@ lock_init (struct lock *lock)
   ASSERT (lock != NULL);
 
   lock->holder = NULL;
+  lock->priority_get = 0;
   sema_init (&lock->semaphore, 1);
+}
+
+bool
+lock_priority_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  struct lock *ta = list_entry (a, struct lock, elem);
+  struct lock *tb = list_entry (b, struct lock, elem);
+
+  if (ta->priority_get < tb->priority_get)
+    return true;
+  else
+    return false;
 }
 
 /* Acquires LOCK, sleeping until it becomes available if
@@ -206,8 +219,25 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
+  if (lock->holder != NULL)
+    {
+      int holder_original = lock->holder->priority;
+      int holder_donated_max = list_entry (list_max (&lock->holder->locks, lock_priority_less, NULL), struct lock, elem)->priority_get;
+
+      int current_donated_max = 0;
+      if (!list_empty (&thread_current ()->locks))
+        current_donated_max = list_entry (list_max (&thread_current ()->locks, lock_priority_less, NULL), struct lock, elem)->priority_get;
+
+      int prio_diff = thread_current ()->priority + current_donated_max - holder_original - holder_donated_max;
+      if (prio_diff > 0)
+        {
+          lock->priority_get = prio_diff + holder_donated_max;
+        }
+    }
+
   sema_down (&lock->semaphore);
   lock->holder = thread_current ();
+  list_insert_ordered (&thread_current ()->locks, &lock->elem, lock_priority_less, NULL);
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -241,6 +271,7 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
+  list_remove (&lock->elem);
   lock->holder = NULL;
   sema_up (&lock->semaphore);
 }
