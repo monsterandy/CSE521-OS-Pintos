@@ -220,23 +220,57 @@ lock_acquire (struct lock *lock)
   ASSERT (!lock_held_by_current_thread (lock));
 
   if (lock->holder != NULL)
-    {
+    {    /* if the lock is held by another thread */
       int holder_original = lock->holder->priority;
-      int holder_donated_max = list_entry (list_max (&lock->holder->locks, lock_priority_less, NULL), struct lock, elem)->priority_get;
 
+      int current_priority = thread_current ()->priority;
       int current_donated_max = 0;
       if (!list_empty (&thread_current ()->locks))
-        current_donated_max = list_entry (list_max (&thread_current ()->locks, lock_priority_less, NULL), struct lock, elem)->priority_get;
+        {   /* if current thread is holding any locks */
+            /* they may donate priority to the current thread */
+          current_donated_max = list_entry (list_max (&thread_current ()->locks, lock_priority_less, NULL), struct lock, elem)->priority_get;
+          current_priority += current_donated_max;
+        }
 
-      int prio_diff = thread_current ()->priority + current_donated_max - holder_original - holder_donated_max;
+      /* priority needed to be donated to the holder */
+      int prio_diff = current_priority - holder_original;
       if (prio_diff > 0)
         {
-          lock->priority_get = prio_diff + holder_donated_max;
+          /* lock's priority = priority needed to be donated to the holder */
+          lock->priority_get = prio_diff;
+          /* current thread is waiting for this lock */
+          thread_current ()->lock_waiting = lock;
+
+          /* iterate through the nested locks to update the priority_nested */
+          struct thread *t = lock->holder;
+          struct list_elem *e = list_max (&t->locks, lock_priority_less, NULL);
+          int lock_priority_get = 0;
+          for (int i = 0; i <= 8; i++)
+            {
+              struct lock *l = list_entry (e, struct lock, elem);
+              lock_priority_get = l->priority_get;
+              /* t->priority_nested is the priority that contributed to nested donation */
+              /* t->priority_nested = current_priority - original priority of that thread - priority donated to the that thread */
+              t->priority_nested = current_priority - t->priority - lock_priority_get;
+              ASSERT (t->priority_nested >= 0);
+
+              /* update the priority_nested of the next thread */
+              l = t->lock_waiting;
+              if (l == NULL)  /* no more nested locks */
+                break;
+              
+              t = l->holder;  /* next nested thread */
+              e = list_max (&t->locks, lock_priority_less, NULL);
+            }
         }
     }
 
   sema_down (&lock->semaphore);
+
+  /* we get the lock */
   lock->holder = thread_current ();
+  thread_current ()->lock_waiting = NULL;
+  /* add the lock to the list of locks that the current thread is holding */
   list_insert_ordered (&thread_current ()->locks, &lock->elem, lock_priority_less, NULL);
 }
 
@@ -271,7 +305,10 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
+  /* current thread no longer holds this lock, remove it from locks */
   list_remove (&lock->elem);
+  /* reset the additional nested priority of this thread */
+  thread_current ()->priority_nested = 0;
   lock->holder = NULL;
   sema_up (&lock->semaphore);
 }

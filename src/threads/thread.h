@@ -90,7 +90,9 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
-    struct list locks;
+    int priority_nested;                /* Priority get through nested donation. */
+    struct list locks;                  /* List of locks that the thread is holding. */
+    struct lock *lock_waiting;          /* Lock that the thread is waiting for. */
 
     struct list_elem allelem;           /* List element for all threads list. */
 

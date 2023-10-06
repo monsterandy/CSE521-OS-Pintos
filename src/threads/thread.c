@@ -399,6 +399,7 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
+  // TODO: Implement priority donation.
   thread_current ()->priority = new_priority;
   thread_yield ();
 }
@@ -410,7 +411,7 @@ thread_get_priority (void)
   int priority_donate = 0;
   if (!list_empty (&thread_current ()->locks))
     priority_donate = list_entry (list_max (&thread_current ()->locks, lock_priority_less, NULL), struct lock, elem)->priority_get;
-  return thread_current ()->priority + priority_donate;
+  return thread_current ()->priority + priority_donate + thread_current ()->priority_nested;
 }
 
 /* Sets the current thread's nice value to NICE. */
@@ -530,6 +531,8 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->priority_nested = 0;
+  t->lock_waiting = NULL;
   list_init (&t->locks);
   t->magic = THREAD_MAGIC;
   t->sleep_ticks = 0;
@@ -570,7 +573,7 @@ thread_priority_larger (const struct list_elem *a, const struct list_elem *b, vo
   if (!list_empty (&tb->locks))
     tb_donate = list_entry (list_max (&tb->locks, lock_priority_less, NULL), struct lock, elem)->priority_get;
 
-  if (ta->priority + ta_donate > tb->priority + tb_donate)
+  if (ta->priority + ta_donate + ta->priority_nested > tb->priority + tb_donate + tb->priority_nested)
     return true;
   else
     return false;
