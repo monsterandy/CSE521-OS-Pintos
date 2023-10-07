@@ -399,6 +399,9 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
+  enum intr_level old_level;
+  old_level = intr_disable ();  /* disable interrupt */
+  
   int old_base_priority = thread_current ()->priority;
   /* if diff is negative, then the thread is lowering its priority. */
   /* otherwise, the thread is raising its priority. */
@@ -418,6 +421,7 @@ thread_set_priority (int new_priority)
   }
 
   thread_current ()->priority += priority_base_diff;
+  intr_set_level (old_level);
   thread_yield ();
 }
 
