@@ -311,10 +311,17 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
-  /* current thread no longer holds this lock, remove it from locks */
-  list_remove (&lock->elem);
-  /* reset the additional nested priority of this thread */
-  thread_current ()->priority_nested = 0;
+  if (list_size (&thread_current ()->locks) != 0)
+   {
+      list_remove (&lock->elem);
+      /* if current thread is not holding any locks */
+      /* we can reset the priority_nested to 0 */
+      if (list_size (&thread_current ()->locks) == 0)
+        {
+          thread_current ()->priority_nested = 0;
+        }
+   }
+
   lock->holder = NULL;
   sema_up (&lock->semaphore);
 }
