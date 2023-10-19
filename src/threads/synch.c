@@ -117,9 +117,12 @@ sema_up (struct semaphore *sema)
   old_level = intr_disable ();
   if (!list_empty (&sema->waiters)) 
     {
-      /* the sema waiters need to be sorted by priority again */
-      /* because the priority of the thread may have changed by donation */
-      list_sort (&sema->waiters, thread_priority_larger, NULL);
+      if (!thread_mlfqs)
+      {
+        /* the sema waiters need to be sorted by priority again */
+        /* because the priority of the thread may have changed by donation */
+        list_sort (&sema->waiters, thread_priority_larger, NULL);
+      }
       thread_unblock (list_entry (list_pop_front (&sema->waiters),
                                   struct thread, elem));
     }
@@ -225,7 +228,7 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
-  if (lock->holder != NULL)
+  if (!thread_mlfqs && lock->holder != NULL)
     {    /* if the lock is held by another thread */
       int holder_original = lock->holder->priority;
 
@@ -275,9 +278,12 @@ lock_acquire (struct lock *lock)
 
   /* we get the lock */
   lock->holder = thread_current ();
-  thread_current ()->lock_waiting = NULL;
-  /* add the lock to the list of locks that the current thread is holding */
-  list_insert_ordered (&thread_current ()->locks, &lock->elem, lock_priority_less, NULL);
+  if (!thread_mlfqs)
+  {
+    thread_current ()->lock_waiting = NULL;
+    /* add the lock to the list of locks that the current thread is holding */
+    list_insert_ordered (&thread_current ()->locks, &lock->elem, lock_priority_less, NULL); 
+  }
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -311,7 +317,7 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
-  if (list_size (&thread_current ()->locks) != 0)
+  if (!thread_mlfqs && list_size (&thread_current ()->locks) != 0)
    {
       list_remove (&lock->elem);
       /* if current thread is not holding any locks */

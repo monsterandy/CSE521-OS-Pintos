@@ -399,6 +399,9 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
+  if (thread_mlfqs)
+    return;
+
   enum intr_level old_level;
   old_level = intr_disable ();  /* disable interrupt */
   
@@ -429,6 +432,9 @@ thread_set_priority (int new_priority)
 int
 thread_get_priority (void) 
 {
+  if (thread_mlfqs)
+    return thread_current ()->priority;
+
   int priority_donate = 0;
   if (!list_empty (&thread_current ()->locks))
     priority_donate = list_entry (list_max (&thread_current ()->locks, lock_priority_less, NULL), struct lock, elem)->priority_get;
