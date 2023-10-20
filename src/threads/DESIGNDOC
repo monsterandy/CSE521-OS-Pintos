@@ -187,10 +187,15 @@ We chose this design because it offers a clear and straightforward way of handli
 
 struct thread
 {
-    fixed_point_t recent_cpu;            /* Estimation of the CPU time the thread will need. */
+    int nice;                           /* Nice value. Integer. */
+    int recent_cpu;                     /* Recent CPU. Fixed-point value. */
 };
 
 Purpose: To store the estimated CPU time required for the Advanced Scheduler.
+
+Defined in thread.c:
+/* System-wide load average. Fixed-point value. */
+static int load_avg;
 
 ---- ALGORITHMS ----
 
@@ -199,6 +204,9 @@ Purpose: To store the estimated CPU time required for the Advanced Scheduler.
 >> scheduling decision and the priority and recent_cpu values for each
 >> thread after each given number of timer ticks:
 
+(Since there are 100 ticks per second, in the given scenario (ticks < 100) 
+the recent_cpu and load_avg won't get a chance to update for every thread)
+
 timer  recent_cpu    priority   thread
 ticks   A   B   C   A   B   C   to run
 -----  --  --  --  --  --  --   ------
@@ -206,23 +214,32 @@ ticks   A   B   C   A   B   C   to run
  4      4   0   0   62  61  59      A
  8      8   0   0   61  61  59      A
 12     12   0   0   60  61  59      B
-16     12   4   0   60  58  59      C
-20     12   4   4   60  58  54      A
-24     16   4   4   59  58  54      B
-28     16   8   4   59  57  54      C
-32     16   8   8   59  57  53      A
-36     20   8   8   58  57  53      B
+16     12   4   0   60  60  59      A
+20     16   4   0   59  60  59      B
+24     16   8   0   59  59  59      C (RR)
+28     16   8   4   59  59  58      A
+32     20   8   4   58  59  58      B
+36     20   12  4   58  58  58      C (RR)
 
 >> C3: Did any ambiguities in the scheduler specification make values
 >> in the table uncertain?  If so, what rule did you use to resolve
 >> them?  Does this match the behavior of your scheduler?
 
-We haven't moved to this step of implementation.
+The priority is recalculated every fourth tick for every thread. 
+It's assumed this happens after the tick and then the scheduling 
+decision is made, but the specification doesn't make this order explicit.
+
+For the priority recalculation frequency, the logical order is to 
+first increase the recent_cpu of the running thread on the tick, 
+and then, if it's the 4th tick, recalculate the priority for all threads 
+before making the next scheduling decision.
 
 >> C4: How is the way you divided the cost of scheduling between code
 >> inside and outside interrupt context likely to affect performance?
 
-The cost of scheduling inside the interrupt context needs to be minimized to ensure performance is not significantly impacted. Major calculations or data structure manipulations are done outside of the interrupt context.
+The cost of scheduling inside the interrupt context needs to be minimized 
+to ensure performance is not significantly impacted. Major calculations 
+or data structure manipulations are done outside of the interrupt context.
 
 ---- RATIONALE ----
 
@@ -232,14 +249,15 @@ The cost of scheduling inside the interrupt context needs to be minimized to ens
 >> refine or improve your design?
 
 Advantages:
-The scheduler adapts to the behavior and requirements of threads dynamically, promoting efficiency.
-Gives more priority to threads that haven't consumed much CPU recently, ensuring fairness.
+Use one ready queue instead of 63 queues to implement the multi-level feedback
+queue scheduler. Simple but effective sincee the single ready_queue is always
+sorted based on priority.
 
 Disadvantages:
-Might be more complex than simpler algorithms, leading to overhead.
-If not finely tuned, could lead to suboptimal scheduling decisions.
-
-(We haven't moved to this step of implementation by submitting this design document.)
+Most calculations happen in the timer interrupt handler. Since inside the interrupter
+handler, the timer ticks won't increase, thus this won't affect the ticks each thread
+really received. However, in a real-world scenario this approach may introduce laggings
+to the user due to the longer interrupt time.
 
 >> C6: The assignment explains arithmetic for fixed-point math in
 >> detail, but it leaves it open to you to implement it.  Why did you
@@ -248,9 +266,11 @@ If not finely tuned, could lead to suboptimal scheduling decisions.
 >> type and/or a set of functions or macros to manipulate fixed-point
 >> numbers, why did you do so?  If not, why not?
 
-Given that Pintos disables floating-point numbers, yet the BSD scheduling specification requires recent_cpu and load_avg to be real numbers, we need to use the fixed-point arithmetic. This ensures precise computation without the overhead of floating-point operations.
-
-We consider it may better to use marcos instead of inline function since they are much simple. We may opt to use other designs during the implementation.
+The fixed_point.h implementation uses macros for several reasons:
+- Macros hide the complexity of bit manipulations, making code clearer and reusable.
+- Macros resolve at compile time, ensuring no runtime overhead.
+- Constants like FRACT_BITS allow easy adjustments to the representation.
+- Using int64_t for multiplication prevents intermediate overflow.
 
 			   SURVEY QUESTIONS
 			   ================
