@@ -94,10 +94,13 @@ struct thread
     struct list locks;                  /* List of locks that the thread is holding. */
     struct lock *lock_waiting;          /* Lock that the thread is waiting for. */
 
+    int nice;                           /* Nice value. Integer. */
+    int recent_cpu;                     /* Recent CPU. Fixed-point value. */
+
     struct list_elem allelem;           /* List element for all threads list. */
 
     struct semaphore sleep_sema;        /* Semaphore to synchronize sleep and awake. */
-    int64_t sleep_ticks;                /* Ticks to sleep. */
+    int sleep_ticks;                /* Ticks to sleep. */
     
     struct list_elem elem_sleep;        /* List element for sleep list. */
     /* Shared between thread.c and synch.c. */
@@ -124,7 +127,7 @@ void thread_tick (void);
 void thread_print_stats (void);
 
 bool compare_sleep_ticks (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
-void thread_sleep (int64_t ticks);
+void thread_sleep (int ticks);
 void thread_awake (void);
 
 typedef void thread_func (void *aux);
@@ -146,11 +149,14 @@ void thread_foreach (thread_action_func *, void *);
 
 int thread_get_priority (void);
 void thread_set_priority (int);
+void thread_update_priority (struct thread *t, void *aux UNUSED);
 
 int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
+void thread_update_recent_cpu (struct thread *t, void *aux);
 int thread_get_load_avg (void);
+void thread_update_load_avg (void);
 
 bool thread_priority_larger(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 

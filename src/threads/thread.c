@@ -12,6 +12,7 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "devices/timer.h"
+#include "threads/fixed-point.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -31,6 +32,9 @@ static struct list all_list;
 
 /* List of sleeping threads. */
 static struct list sleep_list;
+
+/* System-wide load average. Fixed-point value. */
+static int load_avg;
 
 /* Idle thread. */
 static struct thread *idle_thread;
@@ -103,6 +107,9 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+
+  /* load_avg is initialized to 0 at system boot. */
+  load_avg = 0;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -139,11 +146,36 @@ thread_tick (void)
   else
     kernel_ticks++;
 
+  thread_awake ();
+
+  if (thread_mlfqs)
+    {
+      if (t != idle_thread)
+        /* Each time a timer interrupt occurs, 
+        recent_cpu is incremented by 1 for the running thread. */
+        t->recent_cpu = FP_ADD_MIX (t->recent_cpu, 1);
+
+      if (timer_ticks() % TIMER_FREQ == 0)
+        { /* Once per second. */
+          thread_update_load_avg ();
+          thread_foreach (thread_update_recent_cpu, NULL);
+        }
+      if (timer_ticks() % 4 == 0)
+        { /* Every 4 ticks. */
+          thread_foreach (thread_update_priority, NULL);
+          /* Sort the ready_list by priority. */
+          list_sort (&ready_list, thread_priority_larger, NULL);
+          /* Yield the CPU if the running thread does not have the highest priority. */
+          if (t != idle_thread && !list_empty (&ready_list) && t->priority < list_entry (list_front (&ready_list), struct thread, elem)->priority)
+            intr_yield_on_return ();
+        }
+    }
+
+
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
     intr_yield_on_return ();
   
-  thread_awake ();
 }
 
 /* Compare sleep_ticks of two threads. */
@@ -162,7 +194,7 @@ compare_sleep_ticks (const struct list_elem *a, const struct list_elem *b, void 
 /* Sleep a thread for a given number of ticks. 
    Use semaphore to block the thread. */
 void
-thread_sleep (int64_t ticks)
+thread_sleep (int ticks)
 {
   struct thread *t = thread_current ();
   enum intr_level old_level;
@@ -174,6 +206,7 @@ thread_sleep (int64_t ticks)
   old_level = intr_disable ();
   /* We need to order the sleep_list by sleep_ticks. */
   list_insert_ordered (&sleep_list, &t->elem_sleep, compare_sleep_ticks, NULL);
+  // printf ("thread %s is sleeping for %d ticks\n", t->name, ticks);
   /* Use the semaphore to block the thread. */
   sema_down(&t->sleep_sema);
   intr_set_level (old_level);
@@ -443,33 +476,57 @@ thread_get_priority (void)
 
 /* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED) 
+thread_set_nice (int nice) 
 {
-  /* Not yet implemented. */
+  struct thread *cur = thread_current ();
+  cur->nice = nice;
+  thread_update_priority (cur, NULL);
+
+  /* Yield the CPU if the running thread does not have the highest priority. */
+  if (cur != idle_thread && !list_empty (&ready_list) && cur->priority < list_entry (list_front (&ready_list), struct thread, elem)->priority)
+    thread_yield ();
 }
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return thread_current ()->nice;
 }
 
 /* Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return FP_TO_INT_NEAREST (FP_MULT_MIX (load_avg, 100));
+}
+
+/* Update system-wide load_avg. */
+void
+thread_update_load_avg (void)
+{
+  /* ready_threads are threads that are either running or ready to run. */
+  int ready_threads = list_size (&ready_list);
+  if (thread_current () != idle_thread)
+    ready_threads++;
+
+  /* load_avg = (59/60)*load_avg + (1/60)*ready_threads */
+  load_avg = FP_ADD (FP_DIV_MIX (FP_MULT_MIX (load_avg, 59), 60), FP_DIV_MIX (INT_TO_FP (ready_threads), 60));
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return FP_TO_INT_NEAREST (FP_MULT_MIX (thread_current ()->recent_cpu, 100));
+}
+
+/* Update recent_cpu of a thread. */
+void
+thread_update_recent_cpu (struct thread *t, void *aux UNUSED)
+{
+  /* recent_cpu = (2*load_avg)/(2*load_avg + 1) * recent_cpu + nice */
+  t->recent_cpu = FP_ADD_MIX (FP_MULT (FP_DIV (FP_MULT_MIX (load_avg, 2), FP_ADD_MIX (FP_MULT_MIX (load_avg, 2), 1)), t->recent_cpu), t->nice);
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -567,6 +624,21 @@ init_thread (struct thread *t, const char *name, int priority)
   /* KEY: Initialize the sleep semaphore here to avoid memory issue. */
   sema_init(&t->sleep_sema, 0);
 
+  if (thread_mlfqs)
+  {
+    if (t == initial_thread)
+    {
+      t->nice = 0;
+      t->recent_cpu = 0;
+    }
+    else
+    {
+      t->nice = thread_get_nice ();
+      t->recent_cpu = thread_get_recent_cpu ();
+    }
+    thread_update_priority (t, NULL);
+  }
+
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
@@ -583,6 +655,22 @@ alloc_frame (struct thread *t, size_t size)
 
   t->stack -= size;
   return t->stack;
+}
+
+/* Required by mlfqs. Update the priority of a thread. */
+void
+thread_update_priority (struct thread *t, void *aux UNUSED)
+{
+  if (t == idle_thread)
+    return;
+
+  int new_priority = PRI_MAX - FP_TO_INT_ZERO (FP_DIV_MIX (t->recent_cpu, 4)) - 2 * t->nice;
+  if (new_priority > PRI_MAX)
+    new_priority = PRI_MAX;
+  else if (new_priority < PRI_MIN)
+    new_priority = PRI_MIN;
+
+  t->priority = new_priority;
 }
 
 /* Compare priority of two threads. */
