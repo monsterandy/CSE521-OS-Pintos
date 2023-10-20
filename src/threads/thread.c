@@ -146,6 +146,7 @@ thread_tick (void)
   else
     kernel_ticks++;
 
+  /* Required for alarm clock. */
   thread_awake ();
 
   if (thread_mlfqs)
@@ -171,11 +172,9 @@ thread_tick (void)
         }
     }
 
-
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
     intr_yield_on_return ();
-  
 }
 
 /* Compare sleep_ticks of two threads. */
@@ -480,6 +479,7 @@ thread_set_nice (int nice)
 {
   struct thread *cur = thread_current ();
   cur->nice = nice;
+  /* Update priority after changing nice value. */
   thread_update_priority (cur, NULL);
 
   /* Yield the CPU if the running thread does not have the highest priority. */
@@ -494,7 +494,8 @@ thread_get_nice (void)
   return thread_current ()->nice;
 }
 
-/* Returns 100 times the system load average. */
+/* Returns 100 times the system load average. 
+   Round to nearest integer. */
 int
 thread_get_load_avg (void) 
 {
@@ -514,7 +515,8 @@ thread_update_load_avg (void)
   load_avg = FP_ADD (FP_DIV_MIX (FP_MULT_MIX (load_avg, 59), 60), FP_DIV_MIX (INT_TO_FP (ready_threads), 60));
 }
 
-/* Returns 100 times the current thread's recent_cpu value. */
+/* Returns 100 times the current thread's recent_cpu value. 
+   Round to nearest integer. */
 int
 thread_get_recent_cpu (void) 
 {
@@ -627,15 +629,16 @@ init_thread (struct thread *t, const char *name, int priority)
   if (thread_mlfqs)
   {
     if (t == initial_thread)
-    {
+    { /* The initial thread has nice value 0 and recent_cpu 0. */
       t->nice = 0;
       t->recent_cpu = 0;
     }
     else
-    {
+    { /* The new thread inherits the nice value and recent_cpu value of its parent. */
       t->nice = thread_get_nice ();
       t->recent_cpu = thread_get_recent_cpu ();
     }
+    /* Thread priority is calculated initially at thread initialization. */
     thread_update_priority (t, NULL);
   }
 
@@ -664,6 +667,7 @@ thread_update_priority (struct thread *t, void *aux UNUSED)
   if (t == idle_thread)
     return;
 
+  /* priority = PRI_MAX - (recent_cpu / 4) - (nice * 2) */
   int new_priority = PRI_MAX - FP_TO_INT_ZERO (FP_DIV_MIX (t->recent_cpu, 4)) - 2 * t->nice;
   if (new_priority > PRI_MAX)
     new_priority = PRI_MAX;

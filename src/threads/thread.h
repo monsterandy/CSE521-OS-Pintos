@@ -93,7 +93,8 @@ struct thread
     int priority_nested;                /* Priority get through nested donation. */
     struct list locks;                  /* List of locks that the thread is holding. */
     struct lock *lock_waiting;          /* Lock that the thread is waiting for. */
-
+    
+    /* Required for mlqfs. */
     int nice;                           /* Nice value. Integer. */
     int recent_cpu;                     /* Recent CPU. Fixed-point value. */
 
