@@ -4,7 +4,7 @@
             "name": "(gdb) Launch",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/src/threads/build/kernel.o",
+            "program": "${workspaceFolder}/src/userprog/build/kernel.o",
             "miDebuggerPath": "/usr/local/bin/pintos-gdb",
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

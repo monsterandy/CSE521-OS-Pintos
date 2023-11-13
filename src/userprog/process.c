@@ -88,6 +88,9 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
+  // infinite loop
+  while (1) {}
+  
   return -1;
 }
 
@@ -221,8 +224,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
 
+  printf("file_name: %s\n", file_name);
   /* Open executable file. */
   file = filesys_open (file_name);
+  printf("file: %p\n", file);
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
@@ -437,8 +442,11 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
-        *esp = PHYS_BASE;
-      else
+      {
+        *esp = PHYS_BASE - 12;
+        hex_dump(PHYS_BASE - 12, PHYS_BASE - 12, 12, true);
+        printf("esp: %p\n", *esp);
+      } else
         palloc_free_page (kpage);
     }
   return success;
