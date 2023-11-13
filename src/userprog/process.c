@@ -224,10 +224,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
 
-  printf("file_name: %s\n", file_name);
   /* Open executable file. */
   file = filesys_open (file_name);
-  printf("file: %p\n", file);
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
@@ -444,8 +442,6 @@ setup_stack (void **esp)
       if (success)
       {
         *esp = PHYS_BASE - 12;
-        hex_dump(PHYS_BASE - 12, PHYS_BASE - 12, 12, true);
-        printf("esp: %p\n", *esp);
       } else
         palloc_free_page (kpage);
     }
