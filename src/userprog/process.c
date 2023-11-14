@@ -29,6 +29,7 @@ tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
+  char *cmd, *args;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
@@ -38,8 +39,13 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  cmd = strtok_r (fn_copy, " ", &args);
+
+  printf ("cmd: %s\n", cmd);
+  printf ("args: %s\n", args);
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (cmd, PRI_DEFAULT, start_process, args);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -62,7 +68,7 @@ start_process (void *file_name_)
   success = load (file_name, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
-  palloc_free_page (file_name);
+  palloc_free_page (pg_round_down (file_name));
   if (!success) 
     thread_exit ();
 
@@ -198,7 +204,7 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp);
+static bool setup_stack (void **esp, const char *file_name);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -225,10 +231,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (t->name);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", t->name);
       goto done; 
     }
 
@@ -305,7 +311,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp, file_name))
     goto done;
 
   /* Start address. */
@@ -430,10 +436,11 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp, const char *args) 
 {
   uint8_t *kpage;
   bool success = false;
+  char *cmd = thread_current ()->name;
 
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
@@ -441,8 +448,71 @@ setup_stack (void **esp)
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
       {
-        *esp = PHYS_BASE - 12;
-      } else
+        *esp = PHYS_BASE;
+
+        char *token, *save_ptr;
+        int argc = 1;
+        int argc_copy;
+        char *argv[128];
+
+        /* Make a copy of the arguments */
+        char *args_copy = palloc_get_page (0);
+        if (args_copy == NULL)
+          return TID_ERROR;
+        strlcpy (args_copy, args, PGSIZE);
+
+        /* Push the cmd on stack */
+        *esp -= strlen (cmd) + 1;
+        memcpy (*esp, cmd, strlen (cmd) + 1);
+        argv[0] = *esp;
+        
+        /* Break the arguments into words and Place the words at the top of the stack */
+        for (token = strtok_r (args_copy, " ", &save_ptr); token != NULL;
+             token = strtok_r (NULL, " ", &save_ptr))
+        {
+          *esp -= strlen (token) + 1;
+          memcpy (*esp, token, strlen (token) + 1);
+          argv[argc++] = *esp;
+        }
+        argc_copy = argc;
+        argc--;
+
+        /* Word align */
+        while ((uint32_t) *esp % 4 != 0)
+        {
+          *esp -= sizeof (char);
+          memset (*esp, 0, sizeof (char));
+        }
+
+        /* Push the last NULL pointer */
+        *esp -= sizeof (char *);
+        memset (*esp, 0, sizeof (char *));
+
+        /* Push the address of the arguments */
+        while (argc >= 0)
+        {
+          *esp -= sizeof (char *);
+          memcpy (*esp, &argv[argc], sizeof (char *));
+          argc--;
+        }
+
+        /* Push the address of argv[0] */
+        * (uint32_t *) (*esp - sizeof (char *)) = * (uint32_t *) esp;
+        *esp -= sizeof (char *);
+
+        /* Push argc */
+        *esp -= sizeof (char *);
+        memcpy (*esp, &argc_copy, sizeof (char *));
+
+        /* Push the return address */
+        *esp -= sizeof (void *);
+        memset (*esp, 0, sizeof (void *));
+
+        hex_dump ((uintptr_t) *esp, *esp, PHYS_BASE - *esp, true);
+
+        palloc_free_page (args_copy);
+      }
+      else
         palloc_free_page (kpage);
     }
   return success;
