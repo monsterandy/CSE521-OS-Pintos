@@ -8,6 +8,7 @@
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
+#include "userprog/syscall.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -123,6 +124,9 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+
+  file_allow_write (cur->executable);
+  close_all_files (cur);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -237,6 +241,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
       printf ("load: %s: open failed\n", t->name);
       goto done; 
     }
+  t->executable = file;
+  file_deny_write (file);
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -321,7 +327,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
   return success;
 }
 
