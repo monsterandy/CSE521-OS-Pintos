@@ -9,7 +9,6 @@
 #include "threads/intr-stubs.h"
 #include "threads/palloc.h"
 #include "threads/switch.h"
-#include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "devices/timer.h"
 #ifdef USERPROG
@@ -260,6 +259,11 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+#ifdef USERPROG
+  /* Proj2 */
+  t->parent_tid = thread_current ()->tid;
+#endif
+
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
   kf->eip = NULL;
@@ -408,6 +412,23 @@ thread_foreach (thread_action_func *func, void *aux)
     }
 }
 
+/* Returns the thread with given tid. */
+struct thread *
+thread_get_by_tid (tid_t tid)
+{
+  struct list_elem *e;
+  struct thread *t = NULL;
+
+  for (e = list_begin (&all_list); e != list_end (&all_list);
+       e = list_next (e))
+    {
+      t = list_entry (e, struct thread, allelem);
+      if (t->tid == tid && t->status != THREAD_DYING)
+        return t;
+    }
+  return NULL;
+}
+
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
 thread_set_priority (int new_priority) 
@@ -546,6 +567,11 @@ init_thread (struct thread *t, const char *name, int priority)
   /* Proj2 */
   t->fd_count = 2;
   list_init (&t->fd_list);
+  t->exit_status = 0;
+  list_init (&t->child_list);
+  lock_init (&t->child_lock);
+  cond_init (&t->child_cond);
+  t->child_load_status = NOT_LOADED;
 #endif
 
   old_level = intr_disable ();

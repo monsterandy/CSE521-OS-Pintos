@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -14,9 +15,18 @@ enum thread_status
     THREAD_DYING        /* About to be destroyed. */
   };
 
+/* Child load status. */
+enum load_status
+  {
+    NOT_LOADED,
+    LOAD_SUCCESS,
+    LOAD_FAIL
+  };
+
 /* Thread identifier type.
    You can redefine this to whatever type you like. */
 typedef int tid_t;
+typedef int pid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
 /* Thread priorities. */
@@ -101,10 +111,26 @@ struct thread
     int fd_count;                       /* File descriptor count. */
     struct list fd_list;                /* File descriptor list. */
     struct file *executable;            /* Executable file. */
+    int exit_status;                    /* Exit status. */
+
+    struct list child_list;             /* Child list. */
+    struct lock child_lock;             /* Child lock. */
+    struct condition child_cond;        /* Child condition variable. */
+    enum load_status child_load_status; /* Child load status. */
+    tid_t parent_tid;                   /* Parent tid. */
 #endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
+  };
+
+struct child
+  {
+    tid_t tid;
+    int exit_status;
+    bool is_waited;
+    bool is_exited;
+    struct list_elem elem;
   };
 
 /* If false (default), use round-robin scheduler.
@@ -138,6 +164,8 @@ void thread_yield (void);
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
+
+struct thread *thread_get_by_tid (tid_t tid);
 
 int thread_get_priority (void);
 void thread_set_priority (int);

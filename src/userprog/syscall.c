@@ -1,7 +1,9 @@
 #include "userprog/syscall.h"
 #include "userprog/pagedir.h"
+#include "userprog/process.h"
 #include <stdio.h>
 #include <syscall-nr.h>
+#include <string.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
@@ -10,14 +12,17 @@
 #include "devices/input.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
+#include "lib/stdio.h"
 
 
 static void syscall_handler (struct intr_frame *);
-bool is_valid_ptr (const void *ptr);
+bool chk_ptr (const void *ptr);
 struct fd_elem *get_fd_elem (int fd);
 
 static void halt (void);
 static void exit (int status);
+static pid_t exec (const char *cmd_line);
+static int wait (pid_t pid);
 static bool create (const char *file, unsigned initial_size);
 static bool remove (const char *file);
 static int open (const char *file);
@@ -38,8 +43,8 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f) 
 {
-  /* Check the validity of the syscall number and arguments. */
-  if (!is_valid_ptr (f->esp) || !is_valid_ptr (f->esp + 4) || !is_valid_ptr (f->esp + 8) || !is_valid_ptr (f->esp + 12))
+  /* Check the validity of the esp pointer. */
+  if (!chk_ptr (f->esp) || !chk_ptr (f->esp + 4) || !chk_ptr (f->esp + 8) || !chk_ptr (f->esp + 12))
     exit (-1);
 
   // printf ("syscall esp: %p\n", f->esp);
@@ -57,10 +62,10 @@ syscall_handler (struct intr_frame *f)
       exit (*(int *)(f->esp + 4));
       break;
     case SYS_EXEC:
-      printf ("SYS_EXEC\n");
+      f->eax = exec (*(char **)(f->esp + 4));
       break;
     case SYS_WAIT:
-      printf ("SYS_WAIT\n");
+      f->eax = wait (*(int *)(f->esp + 4));
       break;
     case SYS_CREATE:
       f->eax = create (*(char **)(f->esp + 4), *(int *)(f->esp + 8));
@@ -90,18 +95,14 @@ syscall_handler (struct intr_frame *f)
       close (*(int *)(f->esp + 4));
       break;
     default:
-      printf ("syscall unimplemented: %d\n", *(int *)f->esp);
-      thread_exit ();
+      exit (-1);
       break;
   }
-
-  // printf ("system call!\n");
-  // thread_exit ();
 }
 
 /* Returns true if the given pointer is a valid user pointer. */
 bool
-is_valid_ptr (const void *ptr)
+chk_ptr (const void *ptr)
 {
   return ptr != NULL && is_user_vaddr (ptr) && pagedir_get_page (thread_current ()->pagedir, ptr) != NULL;
 }
@@ -132,17 +133,12 @@ close_all_files (struct thread *t)
   struct list_elem *e;
   struct fd_elem *fd_elem;
 
-  for (e = list_begin (&t->fd_list); e != list_end (&t->fd_list); e = list_next (e))
+  while (!list_empty (&t->fd_list))
   {
+    e = list_pop_front (&t->fd_list);
     fd_elem = list_entry (e, struct fd_elem, elem);
-    if (fd_elem->fd != STDIN_FILENO && fd_elem->fd != STDOUT_FILENO)
-    {
-      lock_acquire (&filesys_lock);
-      file_close (fd_elem->file);
-      list_remove (&fd_elem->elem);
-      free (fd_elem);
-      lock_release (&filesys_lock);
-    }
+    file_close (fd_elem->file);
+    free (fd_elem);
   }
 }
 
@@ -160,9 +156,52 @@ static void
 exit (int status)
 {
   struct thread *t = thread_current ();
+  t->exit_status = status;
   printf ("%s: exit(%d)\n", t->name, status);
 
   thread_exit ();
+}
+
+/* Runs the executable whose name is given in cmd_line, 
+  passing any given arguments, and returns the new process’s program id (pid). 
+  Must return pid -1, which otherwise should not be a valid pid, 
+  if the program cannot load or run for any reason. 
+  Thus, the parent process cannot return from the exec until it knows whether 
+  the child process successfully loaded its executable. */
+static pid_t
+exec (const char *cmd_line)
+{
+  pid_t pid;
+  if (!chk_ptr (cmd_line) || !chk_ptr (cmd_line + strlen (cmd_line) - 1))
+    exit (-1);
+  
+  /* Check if the last character of the command line is an ASCII character. */
+  if (*(cmd_line + strlen (cmd_line) - 1) < 0)
+    exit (-1);
+
+  /* Print the last character of the command line in ASCII number. */
+  // printf ("exec last char: %d\n", *(cmd_line + strlen (cmd_line) - 1));
+  
+  struct thread *cur = thread_current ();
+  cur->child_load_status = NOT_LOADED;
+
+  pid = process_execute (cmd_line);
+
+  lock_acquire (&cur->child_lock);
+  while (cur->child_load_status == NOT_LOADED)
+    cond_wait (&cur->child_cond, &cur->child_lock);
+  lock_release (&cur->child_lock);
+
+  if (cur->child_load_status == LOAD_FAIL)
+    return -1;
+  else
+    return pid;
+}
+
+static int
+wait (pid_t pid)
+{
+  return process_wait (pid);
 }
 
 /* Creates a new file called file initially initial size bytes in size. 
@@ -172,7 +211,7 @@ exit (int status)
 static bool
 create (const char *file, unsigned initial_size)
 {
-  if (!is_valid_ptr (file))
+  if (!chk_ptr (file))
     exit (-1);
   
   bool ret = false;
@@ -189,7 +228,7 @@ create (const char *file, unsigned initial_size)
 static bool
 remove (const char *file)
 {
-  if (!is_valid_ptr (file))
+  if (!chk_ptr (file))
     exit (-1);
   
   bool ret = false;
@@ -205,7 +244,7 @@ remove (const char *file)
 static int
 open (const char *file)
 {
-  if (!is_valid_ptr (file))
+  if (!chk_ptr (file))
     exit (-1);
   
   int ret = -1;
@@ -254,7 +293,7 @@ read (int fd, void *buffer, unsigned size)
   /* Check the validity of the buffer. */
   while (chk_size > 0)
   {
-    if (!is_valid_ptr (chk_buffer))
+    if (!chk_ptr (chk_buffer))
       exit (-1);
 
     if (chk_size > PGSIZE)
@@ -267,7 +306,7 @@ read (int fd, void *buffer, unsigned size)
   }
 
   /* Check the end of the buffer. */
-  if (!is_valid_ptr (buffer + size - 1))
+  if (!chk_ptr (buffer + size - 1))
     exit (-1);
 
   lock_acquire (&filesys_lock);
@@ -306,7 +345,7 @@ write (int fd, const void *buffer, unsigned size)
   /* Check the validity of the buffer. */
   while (chk_size > 0)
   {
-    if (!is_valid_ptr (chk_buffer))
+    if (!chk_ptr (chk_buffer))
       exit (-1);
 
     if (chk_size > PGSIZE)
@@ -319,7 +358,7 @@ write (int fd, const void *buffer, unsigned size)
   }
 
   /* Check the end of the buffer. */
-  if (!is_valid_ptr (buffer + size - 1))
+  if (!chk_ptr (buffer + size - 1))
     exit (-1);
 
   lock_acquire (&filesys_lock);

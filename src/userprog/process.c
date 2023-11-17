@@ -18,6 +18,7 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -32,6 +33,8 @@ process_execute (const char *file_name)
   char *fn_copy;
   char *cmd, *args;
   tid_t tid;
+  struct thread *cur;
+  struct child *child;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
@@ -42,13 +45,23 @@ process_execute (const char *file_name)
 
   cmd = strtok_r (fn_copy, " ", &args);
 
-  printf ("cmd: %s\n", cmd);
-  printf ("args: %s\n", args);
+  // printf ("cmd: %s\n", cmd);
+  // printf ("args: %s\n", args);
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (cmd, PRI_DEFAULT, start_process, args);
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+    palloc_free_page (fn_copy);
+  else
+  {
+    cur = thread_current ();
+    child = malloc (sizeof (struct child));
+    child->tid = tid;
+    child->exit_status = -1;
+    child->is_waited = false;
+    child->is_exited = false;
+    list_push_back (&cur->child_list, &child->elem);
+  }
   return tid;
 }
 
@@ -67,6 +80,16 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
+
+  /* Get the parent thread and update its child_load_status */
+  struct thread *parent = thread_get_by_tid (thread_current ()->parent_tid);
+  if (parent != NULL)
+  {
+    lock_acquire (&parent->child_lock);
+    parent->child_load_status = success ? LOAD_SUCCESS : LOAD_FAIL;
+    cond_signal (&parent->child_cond, &parent->child_lock);
+    lock_release (&parent->child_lock);
+  }
 
   /* If load failed, quit. */
   palloc_free_page (pg_round_down (file_name));
@@ -93,12 +116,40 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
-  // infinite loop
-  while (1) {}
+  struct thread *cur = thread_current ();
+  struct child *child;
+  struct list_elem *e;
+  int exit_status;
   
-  return -1;
+  /* Find the child with the given tid */
+  for (e = list_begin (&cur->child_list); e != list_end (&cur->child_list);
+       e = list_next (e))
+  {
+    child = list_entry (e, struct child, elem);
+    if (child->tid == child_tid)
+      break;
+  }
+  /* If the child is not found, return -1 */
+  if (e == list_end (&cur->child_list))
+    return -1;
+  
+  /* If the child is already waited, return -1 */
+  if (child->is_waited)
+    return -1;
+  
+  /* If the child is not exited, wait for it */
+  lock_acquire (&cur->child_lock);
+  child->is_waited = true;
+  while (!child->is_exited)
+    cond_wait (&cur->child_cond, &cur->child_lock);
+  lock_release (&cur->child_lock);
+
+  /* Get the exit status of the child */
+  exit_status = child->exit_status;
+
+  return exit_status;
 }
 
 /* Free the current process's resources. */
@@ -125,8 +176,40 @@ process_exit (void)
       pagedir_destroy (pd);
     }
 
-  file_allow_write (cur->executable);
+  if (cur->executable != NULL)
+    file_allow_write (cur->executable);
   close_all_files (cur);
+
+  /* Free and remove all the child structs from the child_list */
+  struct child *child;
+  struct list_elem *e;
+  while (!list_empty (&cur->child_list))
+  {
+    e = list_pop_front (&cur->child_list);
+    child = list_entry (e, struct child, elem);
+    free (child);
+  }
+
+  /* Get the parent thread, iterate through its child list and update the exit_status */
+  struct thread *parent = thread_get_by_tid (cur->parent_tid);
+  if (parent != NULL)
+  {
+    struct list_elem *e;
+    for (e = list_begin (&parent->child_list); e != list_end (&parent->child_list);
+         e = list_next (e))
+    {
+      child = list_entry (e, struct child, elem);
+      if (child->tid == cur->tid)
+      {
+        lock_acquire (&parent->child_lock);
+        child->exit_status = cur->exit_status;
+        child->is_exited = true;
+        cond_signal (&parent->child_cond, &parent->child_lock);
+        lock_release (&parent->child_lock);
+        break;
+      }
+    }
+  }
 }
 
 /* Sets up the CPU for running user code in the current
@@ -512,8 +595,6 @@ setup_stack (void **esp, const char *args)
         /* Push the return address */
         *esp -= sizeof (void *);
         memset (*esp, 0, sizeof (void *));
-
-        hex_dump ((uintptr_t) *esp, *esp, PHYS_BASE - *esp, true);
 
         palloc_free_page (args_copy);
       }
