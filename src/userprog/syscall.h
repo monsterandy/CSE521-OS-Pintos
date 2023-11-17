@@ -5,6 +5,7 @@
 
 void syscall_init (void);
 void close_all_files (struct thread *t);
+bool chk_ptr (const void *ptr);
 
 struct lock filesys_lock;
 

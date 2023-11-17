@@ -5,6 +5,7 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "userprog/syscall.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -149,7 +150,7 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
-  if (fault_addr == NULL || !is_user_vaddr(fault_addr) || user == false) {
+  if (user || !chk_ptr (fault_addr)) {
       struct thread *t = thread_current ();
       t->exit_status = -1;
       printf ("%s: exit(%d)\n", t->name, -1);
