@@ -1,0 +1,275 @@
+		     +--------------------------+
+             |         CSE 521          |
+		     | PROJECT 2: USER PROGRAMS	|
+		     |     DESIGN DOCUMENT      |
+		     +--------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Zheyuan Ma <zheyuanm@buffalo.edu>
+Xi Tan <xitan@buffalo.edu>
+Gaoxiang Liu <gliu25@buffalo.edu>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+			   ARGUMENT PASSING
+			   ================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+None
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe how you implemented argument parsing.  How do
+>> you arrange for the elements of argv[] to be in the right order?
+>> How do you avoid overflowing the stack page?
+
+Argument Parsing:
+The function setup_stack is designed to set up the user stack for a new process, including parsing the arguments. The arguments are passed as a single string args. This string is first copied into a separate buffer args_copy to avoid modifying the original string. The command name (cmd) is obtained from thread_current()->name and is also placed onto the stack. The strtok_r function is used to tokenize args_copy into individual arguments, separated by spaces. This is done in a loop where each token represents an argument.
+
+Arranging argv[] Elements:
+An array argv[] is used to store pointers to the arguments on the stack. The first element of argv[] is set to point to the command name.As each argument token is identified, it is placed on the stack (top-down, decreasing stack pointer), and the corresponding pointer in argv[] is set to point to this location on the stack. This means argv[1] points to the first argument, argv[2] to the second, and so on. The arguments are placed on the stack in reverse order (last argument first). However, the argv[] array is filled from the start, ensuring that argv[0], argv[1], ..., argv[argc-1] are in the correct order as expected by the program's main function. After all arguments are placed on the stack, the stack is word-aligned.
+
+Final Stack Arrangement:
+The elements of argv[] are then pushed onto the stack in reverse order (from argv[argc-1] to argv[0]). This is done to comply with the calling convention where argv[0] should be at the lowest address. The address of argv[0] (i.e., the pointer to argv[]) is pushed onto the stack. argc (the argument count) and a fake return address (0) are also pushed onto the stack.
+
+To avoid overflowing the stack page:
+We handle this case in the page_fault handler. If overflow happens, page_fault handler will exit the user program.
+
+---- RATIONALE ----
+
+>> A3: Why does Pintos implement strtok_r() but not strtok()?
+
+strtok() is not thread-safe. It maintains internal state between calls using a static buffer. This means if strtok() is called in a multi-threaded environment or reentered (for instance, if a recursive call to strtok() occurs, or if it's called simultaneously from two different threads), it can lead to data corruption or unexpected behavior.
+strtok_r(), on the other hand, does not use static data; instead, it requires the caller to maintain the state. This is done by passing a pointer to a char* variable (often called saveptr) that keeps track of the current position in the string. This design makes strtok_r() safe for use in multi-threaded environments and reentrant functions.
+
+>> A4: In Pintos, the kernel separates commands into a executable name
+>> and arguments.  In Unix-like systems, the shell does this
+>> separation.  Identify at least two advantages of the Unix approach.
+
+- Keeping the command parsing in user space (the shell) rather than kernel space provides a layer of security and stability. Errors or vulnerabilities in command parsing won't directly compromise the kernel. If a shell crashes or encounters an issue, it won't necessarily bring down the entire system, whereas a flaw in the kernel would be more critical.
+
+- Shells can be replaced or customized without affecting the underlying kernel. This allows for a wide variety of user environments tailored to different needs, without requiring changes to the core operating system.
+
+
+			     SYSTEM CALLS
+			     ============
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+struct thread
+{
+    ...
+    int fd_count;                       /* File descriptor count. */
+    struct list fd_list;                /* File descriptor list. */
+    struct file *executable;            /* Executable file. */
+    int exit_status;                    /* Exit status. */
+
+    struct list child_list;             /* Child list. */
+    struct lock child_lock;             /* Child lock. */
+    struct condition child_cond;        /* Child condition variable. */
+    enum load_status child_load_status; /* Child load status. */
+    tid_t parent_tid;                   /* Parent tid. */
+}
+
+struct child
+  {
+    tid_t tid;                         /* Child tid. */
+    int exit_status;                   /* Exit status of this child. */
+    bool is_waited;                    /* Is already waited. */
+    bool is_exited;                    /* Is already exited. */
+    struct list_elem elem;             /* List element. */
+  };
+
+/* Child load status. */
+enum load_status
+{
+    NOT_LOADED,
+    LOAD_SUCCESS,
+    LOAD_FAIL
+};
+
+/* File descriptor element. Used to map fd to the file struct. */
+struct fd_elem
+{
+  int fd;
+  struct file *file;
+  struct list_elem elem;
+};
+
+>> B2: Describe how file descriptors are associated with open files.
+>> Are file descriptors unique within the entire OS or just within a
+>> single process?
+
+Each thread maintains a list of file descriptors. Each file descriptor is associated with a file struct. The file descriptor is unique within a single process, but not necessarily unique within the entire OS. Different processes can have the same file descriptor, but they will be associated with different file structs.
+
+---- ALGORITHMS ----
+
+>> B3: Describe your code for reading and writing user data from the
+>> kernel.
+
+Before reading an address provided by the user, we first check if the address is below PHYS_BASE. If it is not valid, we exit the user program. If it is valid, we use the function pagedir_get_page() to get the corresponding kernel virtual address. If the return is not NULL, we can read the data from the kernel virtual address. Otherwise, we exit the user program.
+The checking procedure is implemented in the function chk_str().
+
+>> B4: Suppose a system call causes a full page (4,096 bytes) of data
+>> to be copied from user space into the kernel.  What is the least
+>> and the greatest possible number of inspections of the page table
+>> (e.g. calls to pagedir_get_page()) that might result?  What about
+>> for a system call that only copies 2 bytes of data?  Is there room
+>> for improvement in these numbers, and how much?
+
+For a full page of data (4,096 bytes):
+The minimum number of inspections is 1. This occurs if the first inspection, such as through pagedir_get_page(), retrieves the head of a page. Since a page in memory is typically 4,096 bytes, if the starting address of the data aligns with the page head, the entire data block is guaranteed to be within a single page, eliminating the need for further inspections.
+The maximum could be 4,096 in a worst-case scenario where the data is not contiguous in memory, requiring each byte's address to be verified. 
+However, in a more typical scenario where the data is contiguous but does not start at the head of a page, the maximum number would be 2. This is because inspections would be required at both the start and end of the data block to ensure it is fully mapped within one or two contiguous pages.
+
+For 2 bytes of data:
+The minimum is 1. If the address retrieved from the first inspection indicates more than 2 bytes remaining in the page, it confirms that both bytes are within the same page, so no additional inspection is needed.
+The maximum is 2, which occurs in two cases. First, if the data is not contiguous, requiring a check for each byte. Second, if the data is contiguous but spans the boundary of a page (i.e., the first byte is at the end of one page and the second byte is at the start of the next), necessitating an inspection for each byte's location.
+
+>> B5: Briefly describe your implementation of the "wait" system call
+>> and how it interacts with process termination.
+
+wait Function:
+The wait function is a simple wrapper around the process_wait function. It takes a process ID (pid) as its argument and returns the exit status of the process.
+
+process_wait Function:
+This function searches for a child process with the given child_tid in the current thread's child_list.
+If the child is not found or if it has already been waited on (indicated by child->is_waited), the function returns -1.
+If the child is found and has not been waited on, it sets child->is_waited to true to prevent future waits on the same child.
+The function then enters a wait state until the child exits. This is done by using a condition variable (child_cond) and a lock (child_lock) to wait for the signal indicating that the child has exited.
+Once the child has exited, the function retrieves the child's exit status and returns it.
+
+When a process terminates, process_exit updates the exit status in its child structure within the parent's child list and signals that it has exited.
+Meanwhile, if the parent is waiting on this child process using process_wait, it is notified by the condition variable that the child has exited. The parent can then retrieve the exit status and proceed.
+
+>> B6: Any access to user program memory at a user-specified address
+>> can fail due to a bad pointer value.  Such accesses must cause the
+>> process to be terminated.  System calls are fraught with such
+>> accesses, e.g. a "write" system call requires reading the system
+>> call number from the user stack, then each of the call's three
+>> arguments, then an arbitrary amount of user memory, and any of
+>> these can fail at any point.  This poses a design and
+>> error-handling problem: how do you best avoid obscuring the primary
+>> function of code in a morass of error-handling?  Furthermore, when
+>> an error is detected, how do you ensure that all temporarily
+>> allocated resources (locks, buffers, etc.) are freed?  In a few
+>> paragraphs, describe the strategy or strategies you adopted for
+>> managing these issues.  Give an example.
+
+Before any system call proceeds with its primary function, a pre-validation step is implemented to check the validity of user-provided pointers. This is done using a custom function chk_ptr.
+The chk_ptr function is responsible for several checks: it verifies that the pointer is not NULL, that it points to a valid user address, and that it is correctly mapped in the process's page directory.
+As an example, in the case of a "read" system call, the ESP pointer and the three argument pointers are checked first. If any of these checks fail, indicating an invalid pointer, the process is immediately terminated.
+
+In addition to pre-validation checks, error handling is also implemented in the page fault exception handler.
+The page fault handler first determines if the fault occurred in user space. If so, it proceeds to validate the faulting address using the chk_ptr function.
+If the faulting address is invalid, as in the case of a dereference of a NULL pointer (*(volatile int *) NULL), the process is terminated. The termination includes setting the process's return status to -1 to indicate an error.
+
+In process_exit function:
+The close_all_files function iterates through the process's list of file descriptors (fd_list). For each file descriptor, it closes the associated file using file_close and then frees the memory allocated for the file descriptor structure (fd_elem). This systematic closure and deallocation prevent resource leaks related to file descriptors.
+In process_exit, the function iterates through the list of child processes (child_list). Each child structure is removed from the list and freed, ensuring that no memory allocated for tracking child processes is leaked.
+
+---- SYNCHRONIZATION ----
+
+>> B7: The "exec" system call returns -1 if loading the new executable
+>> fails, so it cannot return before the new executable has completed
+>> loading.  How does your code ensure this?  How is the load
+>> success/failure status passed back to the thread that calls "exec"?
+
+The exec function initiates the loading of the new executable by calling process_execute(cmd_line), which returns a process ID (pid).
+After calling process_execute, exec does not immediately return. Instead, it enters a waiting state to ensure the new executable has finished loading.
+This waiting state is implemented using a condition variable (cur->child_cond) and a lock (cur->child_lock). The calling thread acquires the lock and waits on the condition variable until the child_load_status is no longer NOT_LOADED.
+This wait operation effectively blocks the exec call from returning until the child process loading is either successful or fails.
+
+The status of the load operation is communicated back to the exec call through the child_load_status variable in the parent thread's structure.
+In start_process, which is the function responsible for loading the executable, the load result (success) is determined.
+If the load is successful, child_load_status is set to LOAD_SUCCESS; if it fails, it is set to LOAD_FAIL.
+The parent thread (the one that called exec) is then signaled using cond_signal, indicating that the loading process has completed.
+Upon receiving this signal, the exec function, which was waiting, proceeds to check the child_load_status. Based on this status, exec returns either the process ID (on successful load) or -1 (if loading fails or if process_execute returned TID_ERROR).
+
+>> B8: Consider parent process P with child process C.  How do you
+>> ensure proper synchronization and avoid race conditions when P
+>> calls wait(C) before C exits?  After C exits?  How do you ensure
+>> that all resources are freed in each case?  How about when P
+>> terminates without waiting, before C exits?  After C exits?  Are
+>> there any special cases?
+
+- P calls wait(C) Before C Exits:
+Synchronization: The parent process P uses a condition variable (child_cond) and a lock (child_lock) to wait for the child process C to change its state. P enters a waiting state until C signals that it has exited.
+Avoiding Race Conditions: The use of locks ensures that updates to the child's state (such as setting is_exited and updating exit_status) are atomic, preventing race conditions.
+Resource Cleanup: C's resources are not immediately freed upon exit; instead, they are retained until P has called wait(C) to collect the exit status. After P collects this information, C's resources are freed.
+
+- P calls wait(C) After C Exits:
+Synchronization: If C has already exited, P will find the exit status already available in C's structure in the child list, avoiding the need to wait.
+Resource Cleanup: After P retrieves C's exit status, it proceeds to free C's resources, ensuring no memory leaks.
+
+- P Terminates Without Waiting, Before C Exits:
+Handling Orphaned Process: If P terminates without waiting for C, C becomes an orphan. In this case, the child process's parent_tid is invalid (when checked later with this tid will return null).
+Resource Cleanup: P's resources are freed upon its termination. However, C's resources remain allocated until C exits.
+
+- P Terminates Without Waiting, After C Exits:
+Resource Cleanup: If C has already exited, its resources are freed upon exit. P's resources are freed upon its termination.
+
+- Special Cases:
+Double Waiting: The code ensures that a parent cannot wait for a child more than once, as the is_waited flag in the child structure is set the first time wait is called.
+Multiple Children: P can have multiple children, and the mechanisms of waiting and resource cleanup apply to each child independently.
+
+---- RATIONALE ----
+
+>> B9: Why did you choose to implement access to user memory from the
+>> kernel in the way that you did?
+
+The user memory address is validated before any access is made to it. We choose this approach because it is the most straightforward way to ensure that the user memory address is valid.
+
+>> B10: What advantages or disadvantages can you see to your design
+>> for file descriptors?
+
+Each thread maintains a list of file descriptors. Each file descriptor is associated with a file struct. The file descriptor is unique within a single process, but not necessarily unique within the entire OS. Different processes can have the same file descriptor, but they will be associated with different file structs.
+The advantage it that managing file descriptors is easy. The disadvantage is that the thread structure is a little bit large.
+
+>> B11: The default tid_t to pid_t mapping is the identity mapping.
+>> If you changed it, what advantages are there to your approach?
+
+We did not change the default tid_t to pid_t mapping.
+
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?
